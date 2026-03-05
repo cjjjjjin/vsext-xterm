@@ -4,7 +4,7 @@
     <Platform Name="arm64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="xtermExtension/xtermExtension.csproj">
+  <Project Path="xtermExtension/xtermExtension.csproj" Id="05d1aa92-ae25-4bc0-b393-931247629c27">
     <Platform Solution="*|arm64" Project="arm64" />
     <Platform Solution="*|x86" Project="x86" />
   </Project>

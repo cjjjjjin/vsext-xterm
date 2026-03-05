@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidxtermExtensionPackage">
+    <Groups>
+      <Group guid="guidxtermExtensionCmdSet" id="MyMenuGroup" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidxtermExtensionCmdSet" id="cmdidOpenXtermTab" priority="0x0100" type="Button">
+        <Parent guid="guidxtermExtensionCmdSet" id="MyMenuGroup" />
+        <Strings>
+          <ButtonText>Open Xterm Tab</ButtonText>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidxtermExtensionPackage" value="{0670bc1c-c365-43be-b1cd-e94d7b766f0f}" />
+    <GuidSymbol name="guidxtermExtensionCmdSet" value="{70516c53-3cae-4f12-8e66-2f3f4ce13f98}">
+      <IDSymbol name="MyMenuGroup" value="0x1020" />
+      <IDSymbol name="cmdidOpenXtermTab" value="0x0100" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>
