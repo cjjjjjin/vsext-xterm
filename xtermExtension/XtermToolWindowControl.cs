@@ -2,6 +2,7 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -25,6 +26,7 @@ namespace xtermExtension
         private readonly SemaphoreSlim inputWriteGate = new SemaphoreSlim(1, 1);
 
         private readonly WebView2 terminalWebView;
+        private readonly Button resetButton;
 
         private ConPtySession conPtySession;
         private Stream inputStream;
@@ -37,6 +39,9 @@ namespace xtermExtension
         private int terminalCols = 120;
         private int terminalRows = 30;
         private bool isDisposing;
+        private bool isResetting;
+        private bool isWebMessageHooked;
+        public bool IsClosed { get; private set; }
 
         public XtermToolWindowControl()
         {
@@ -55,8 +60,23 @@ namespace xtermExtension
                 }
             };
 
-            Content = terminalWebView;
+            resetButton = new Button
+            {
+                Content = "Reset",
+                Width = 90,
+                Height = 28,
+                Margin = new Thickness(8)
+            };
+            resetButton.Click += OnResetClicked;
+
+            DockPanel root = new DockPanel();
+            DockPanel.SetDock(resetButton, Dock.Bottom);
+            root.Children.Add(resetButton);
+            root.Children.Add(terminalWebView);
+
+            Content = root;
             Loaded += OnLoaded;
+            IsVisibleChanged += OnIsVisibleChanged;
             Unloaded += OnUnloaded;
         }
 
@@ -69,6 +89,7 @@ namespace xtermExtension
                 await terminalWebView.EnsureCoreWebView2Async();
                 terminalWebView.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
                 terminalWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                isWebMessageHooked = true;
                 terminalWebView.NavigateToString(BuildTerminalHtml());
                 StartConPtyBackend();
             }
@@ -83,24 +104,165 @@ namespace xtermExtension
             }
         }
 
-        private async void OnUnloaded(object sender, RoutedEventArgs e)
+        private void OnUnloaded(object sender, RoutedEventArgs e)
+        {
+            LogEvent("Unloaded fired");
+
+            if (isDisposing)
+            {
+                LogEvent("Unloaded during close");
+                return;
+            }
+
+            LogEvent("Unloaded by tab switch/layout change (no cleanup)");
+        }
+
+        private void OnIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            bool isVisible = (bool)e.NewValue;
+            LogEvent("IsVisibleChanged fired: IsVisible=" + isVisible);
+
+            if (isVisible && !isDisposing)
+            {
+                try
+                {
+                    if (IsClosed)
+                    {
+                        _ = ReviveAfterCloseAsync();
+                    }
+
+                    terminalWebView.Focus();
+                    SendMessageToTerminal("fit", null);
+                    SendMessageToTerminal("focus", null);
+                    LogEvent("Visibility restore: focus+fit posted");
+                }
+                catch (Exception ex)
+                {
+                    LogEvent("Visibility restore failed: " + ex.Message);
+                }
+            }
+        }
+
+        private static void LogEvent(string message)
+        {
+            string line = "[xtermExtension] " + DateTime.Now.ToString("HH:mm:ss.fff") + " " + message;
+            Console.WriteLine(line);
+            Debug.WriteLine(line);
+        }
+
+        public void BeginClose()
         {
             if (isDisposing)
             {
+                LogEvent("BeginClose skipped because dispose is already in progress");
                 return;
             }
 
             isDisposing = true;
+            IsClosed = true;
+            LogEvent("BeginClose started");
 
             if (terminalWebView?.CoreWebView2 != null)
             {
                 terminalWebView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                isWebMessageHooked = false;
             }
 
+            _ = CleanupForCloseAsync();
+        }
+
+        private async Task CleanupForCloseAsync()
+        {
             await StopConPtyBackendAsync();
 
             try { flushTimer?.Dispose(); } catch { }
-            try { inputWriteGate.Dispose(); } catch { }
+
+            LogEvent("BeginClose cleanup completed");
+        }
+
+        private async Task ReviveAfterCloseAsync()
+        {
+            if (!IsClosed)
+            {
+                return;
+            }
+
+            LogEvent("ReviveAfterClose started");
+
+            try
+            {
+                if (terminalWebView.CoreWebView2 == null)
+                {
+                    await terminalWebView.EnsureCoreWebView2Async();
+                    terminalWebView.NavigateToString(BuildTerminalHtml());
+                }
+
+                if (!isWebMessageHooked && terminalWebView.CoreWebView2 != null)
+                {
+                    terminalWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+                    isWebMessageHooked = true;
+                }
+
+                isDisposing = false;
+                IsClosed = false;
+                isTerminalReady = false;
+
+                if (conPtySession == null)
+                {
+                    StartConPtyBackend();
+                }
+
+                SendMessageToTerminal("clear", null);
+                SendMessageToTerminal("fit", null);
+                SendMessageToTerminal("focus", null);
+                LogEvent("ReviveAfterClose completed");
+            }
+            catch (Exception ex)
+            {
+                LogEvent("ReviveAfterClose failed: " + ex.Message);
+            }
+        }
+
+        public void EnsureActiveAfterShow()
+        {
+            if (IsClosed)
+            {
+                _ = ReviveAfterCloseAsync();
+            }
+        }
+
+        private async void OnResetClicked(object sender, RoutedEventArgs e)
+        {
+            if (isDisposing || isResetting)
+            {
+                return;
+            }
+
+            isResetting = true;
+            LogEvent("Reset clicked");
+
+            try
+            {
+                resetButton.IsEnabled = false;
+                await StopConPtyBackendAsync();
+                lock (pendingLock)
+                {
+                    pendingWrites.Clear();
+                }
+                lock (batchLock)
+                {
+                    writeBatch.Clear();
+                }
+                isTerminalReady = false;
+                terminalWebView.NavigateToString(BuildTerminalHtml());
+                StartConPtyBackend();
+                LogEvent("Reset completed");
+            }
+            finally
+            {
+                resetButton.IsEnabled = true;
+                isResetting = false;
+            }
         }
 
         private void StartConPtyBackend()
@@ -301,14 +463,26 @@ namespace xtermExtension
                     {
                         isTerminalReady = true;
                     }
+                    LogEvent("Terminal ready message received");
                     FlushPendingWrites();
                     SendMessageToTerminal("fit", null);
                     SendMessageToTerminal("focus", null);
                     break;
 
                 case "input":
+                    if (!isTerminalReady)
+                    {
+                        lock (pendingLock)
+                        {
+                            isTerminalReady = true;
+                        }
+                        LogEvent("Terminal ready fallback activated by input");
+                        FlushPendingWrites();
+                    }
+
                     if (!string.IsNullOrEmpty(message.data))
                     {
+                        LogEvent("Input message received: len=" + message.data.Length);
                         await SendInputAsync(message.data);
                     }
                     break;
@@ -350,6 +524,7 @@ namespace xtermExtension
                     Stream stream = inputStream;
                     if (stream == null)
                     {
+                        LogEvent("SendInputAsync skipped: inputStream is null");
                         return;
                     }
 
@@ -359,14 +534,16 @@ namespace xtermExtension
                         stream.Write(bytes, 0, bytes.Length);
                         stream.Flush();
                     });
+                    LogEvent("SendInputAsync wrote bytes: " + bytes.Length);
                 }
                 finally
                 {
                     inputWriteGate.Release();
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                LogEvent("SendInputAsync failed: " + ex.Message);
             }
         }
 
@@ -434,10 +611,15 @@ namespace xtermExtension
             return;
           }
 
-          switch (message.type) {
+            switch (message.type) {
             case 'write':
               if (terminal && message.data) {
                 terminal.write(message.data);
+              }
+              break;
+            case 'clear':
+              if (terminal) {
+                terminal.clear();
               }
               break;
             case 'fit':
@@ -448,6 +630,10 @@ namespace xtermExtension
             case 'focus':
               if (terminal) {
                 terminal.focus();
+                const textarea = document.querySelector('.xterm-helper-textarea');
+                if (textarea) {
+                  textarea.focus();
+                }
               }
               break;
           }

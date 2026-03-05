@@ -43,6 +43,15 @@ namespace xtermExtension
                 {
                     throw new NotSupportedException("Cannot create tool window.");
                 }
+
+                if (window is XtermToolWindow xtermWindow)
+                {
+                    xtermWindow.RecreateContentIfNeeded("CommandOpen");
+                    if (xtermWindow.Content is XtermToolWindowControl control)
+                    {
+                        control.EnsureActiveAfterShow();
+                    }
+                }
             });
         }
     }
