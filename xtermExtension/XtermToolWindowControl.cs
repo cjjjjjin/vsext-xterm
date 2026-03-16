@@ -667,6 +667,19 @@ namespace xtermExtension
         fitAddon.fit();
         terminal.focus();
 
+        terminal.attachCustomKeyEventHandler(function(event) {
+          if (event.type !== 'keydown' || event.key !== 'Enter') {
+            return true;
+          }
+
+          if (event.shiftKey || event.ctrlKey) {
+            postMessageToHost({ type: 'input', data: '^\r' });
+            return false;
+          }
+
+          return true;
+        });
+
         terminal.onData(function(data) {
           postMessageToHost({ type: 'input', data: data });
         });
